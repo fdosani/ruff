@@ -818,7 +818,12 @@ impl<'db> Type<'db> {
     }
 
     pub fn module_literal(db: &'db dyn Db, importing_file: File, submodule: &Module) -> Self {
-        Self::ModuleLiteral(ModuleLiteralType::new(db, importing_file, submodule))
+        let kind = if submodule.kind().is_package() {
+            ModuleKind::Package { importing_file }
+        } else {
+            ModuleKind::SingleFile
+        };
+        Self::ModuleLiteral(ModuleLiteralType::new(db, submodule, kind))
     }
 
     pub const fn into_module_literal(self) -> Option<ModuleLiteralType<'db>> {
@@ -7499,14 +7504,11 @@ pub enum WrapperDescriptorKind {
 #[salsa::interned(debug)]
 #[derive(PartialOrd, Ord)]
 pub struct ModuleLiteralType<'db> {
-    /// The file in which this module was imported.
-    ///
-    /// We need this in order to know which submodules should be attached to it as attributes
-    /// (because the submodules were also imported in this file).
-    pub importing_file: File,
-
     /// The imported module.
     pub module: Module,
+
+    /// Whether the module is a package or a single-file module.
+    pub kind: ModuleKind,
 }
 
 // The Salsa heap is tracked separately.
@@ -7533,14 +7535,15 @@ impl<'db> ModuleLiteralType<'db> {
         // chosen to always have the submodule take priority. (This matches pyright's
         // current behavior, but is the opposite of mypy's current behavior.)
         if let Some(submodule_name) = ModuleName::new(name) {
-            let importing_file = self.importing_file(db);
-            let imported_submodules = imported_modules(db, importing_file);
-            let mut full_submodule_name = self.module(db).name().clone();
-            full_submodule_name.extend(&submodule_name);
-            if imported_submodules.contains(&full_submodule_name) {
-                if let Some(submodule) = resolve_module(db, &full_submodule_name) {
-                    return Place::bound(Type::module_literal(db, importing_file, &submodule))
-                        .into();
+            if let ModuleKind::Package { importing_file } = self.kind(db) {
+                let imported_submodules = imported_modules(db, importing_file);
+                let mut full_submodule_name = self.module(db).name().clone();
+                full_submodule_name.extend(&submodule_name);
+                if imported_submodules.contains(&full_submodule_name) {
+                    if let Some(submodule) = resolve_module(db, &full_submodule_name) {
+                        return Place::bound(Type::module_literal(db, importing_file, &submodule))
+                            .into();
+                    }
                 }
             }
         }
@@ -7550,6 +7553,20 @@ impl<'db> ModuleLiteralType<'db> {
             .map(|file| imported_symbol(db, file, name, None))
             .unwrap_or_default()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ModuleKind {
+    Package {
+        /// The file in which this module was imported.
+        ///
+        /// For a module that _could_ have submodules (a package), we need this
+        /// in order to know which submodules should be attached to it as attributes
+        /// (because the submodules were also imported in this file).
+        importing_file: File,
+    },
+
+    SingleFile,
 }
 
 /// # Ordering

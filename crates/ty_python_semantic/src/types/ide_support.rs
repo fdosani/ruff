@@ -7,7 +7,7 @@ use crate::semantic_index::place::ScopeId;
 use crate::semantic_index::{
     attribute_scopes, global_scope, imported_modules, place_table, semantic_index, use_def_map,
 };
-use crate::types::{ClassBase, ClassLiteral, KnownClass, KnownInstanceType, Type};
+use crate::types::{ClassBase, ClassLiteral, KnownClass, KnownInstanceType, ModuleKind, Type};
 use crate::{Db, NameKind};
 use ruff_db::files::File;
 use ruff_python_ast as ast;
@@ -198,23 +198,26 @@ impl<'db> AllMembers<'db> {
                 }
 
                 let module_name = module.name();
-                self.members.extend(
-                    imported_modules(db, literal.importing_file(db))
-                        .iter()
-                        .filter_map(|submodule_name| {
-                            let module = resolve_module(db, submodule_name)?;
-                            let ty = Type::module_literal(db, file, &module);
-                            Some((submodule_name, ty))
-                        })
-                        .filter_map(|(submodule_name, ty)| {
-                            let relative = submodule_name.relative_to(module_name)?;
-                            Some((relative, ty))
-                        })
-                        .filter_map(|(relative_submodule_name, ty)| {
-                            let name = Name::from(relative_submodule_name.components().next()?);
-                            Some(Member { name, ty })
-                        }),
-                );
+
+                if let ModuleKind::Package { importing_file } = literal.kind(db) {
+                    self.members.extend(
+                        imported_modules(db, importing_file)
+                            .iter()
+                            .filter_map(|submodule_name| {
+                                let module = resolve_module(db, submodule_name)?;
+                                let ty = Type::module_literal(db, file, &module);
+                                Some((submodule_name, ty))
+                            })
+                            .filter_map(|(submodule_name, ty)| {
+                                let relative = submodule_name.relative_to(module_name)?;
+                                Some((relative, ty))
+                            })
+                            .filter_map(|(relative_submodule_name, ty)| {
+                                let name = Name::from(relative_submodule_name.components().next()?);
+                                Some(Member { name, ty })
+                            }),
+                    );
+                }
             }
         }
     }
